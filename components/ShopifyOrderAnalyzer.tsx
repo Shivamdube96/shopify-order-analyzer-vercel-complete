@@ -6,8 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Download, FileUp, Search, BarChart2, RefreshCcw, UploadCloud, ShieldCheck, FileText, Calendar } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, CartesianGrid } from "recharts";
+import { Download, FileUp, Search, BarChart2, RefreshCcw, UploadCloud, ShieldCheck, FileText, Calendar, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, CartesianGrid, Legend } from "recharts";
 
 // ---- Config -----------------------------------------------------------------
 const COL_KEYS = {
@@ -73,7 +73,8 @@ const exportCSV = (rows: any[], filename = "filtered_orders.csv") => {
   const header = Object.keys(rows[0] || { "Order Name": "", "Total Quantity of Product": "", "Total Order Value": "" });
   const csv = [header.join(",")] 
     .concat(rows.map((r) => header.map((h) => (r[h] ?? "").toString().replaceAll(",", ";")).join(",")))
-    .join("\\n");
+    .join("
+");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -87,7 +88,8 @@ const exportMonthlyCSV = (rows: any[], filename = "monthly_summary.csv") => {
   const header = Object.keys(rows[0] || { Month: "", "Unique Orders": "", AOV: "" });
   const csv = [header.join(",")] 
     .concat(rows.map((r) => header.map((h) => (r[h] ?? "").toString().replaceAll(",", ";")).join(",")))
-    .join("\\n");
+    .join("
+");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -107,6 +109,7 @@ export default function ShopifyOrderAnalyzer() {
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string>("ALL");
+  const [vizMode, setVizMode] = useState<"grouped" | "stacked">("grouped");
 
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -306,8 +309,47 @@ export default function ShopifyOrderAnalyzer() {
     return { monthOrder: sortedKeys, monthOptions: options, monthlyData: result, monthlySummary: summaryRows };
   }, [rows, keyword, colMap, orderMeta]);
 
+  // ---- Monthly comparison data (grouped/stacked & MoM deltas) ---------------
+  const { compChartData, compMonths, compMonthLabels, compQuantities, compDelta } = useMemo(() => {
+    const compMonths = monthOrder;
+    const compMonthLabels = compMonths.map((k) => monthlyData[k]?.label || k);
+    const qSet = new Set<number>();
+    compMonths.forEach((m) => (monthlyData[m]?.qtyDistribution || []).forEach((d: any) => qSet.add(d["Quantity per Order"])));
+    const compQuantities = Array.from(qSet).sort((a, b) => a - b);
+
+    const compChartData = compQuantities.map((q) => {
+      const row: any = { qty: String(q) };
+      compMonths.forEach((m) => {
+        const arr = monthlyData[m]?.qtyDistribution || [];
+        const found = arr.find((d: any) => d["Quantity per Order"] === q);
+        row[m] = found ? found.Percentage : 0;
+      });
+      return row;
+    });
+
+    // deltas per qty per month vs previous
+    const compDelta: Record<string, Record<string, number | null>> = {};
+    compQuantities.forEach((q) => {
+      const key = String(q);
+      compDelta[key] = {} as Record<string, number | null>;
+      compMonths.forEach((m, idx) => {
+        const cur = compChartData.find((r) => r.qty === key)?.[m] ?? 0;
+        if (idx === 0) compDelta[key][m] = null;
+        else {
+          const prev = compChartData.find((r) => r.qty === key)?.[compMonths[idx - 1]] ?? 0;
+          compDelta[key][m] = Number((cur - prev).toFixed(2));
+        }
+      });
+    });
+
+    return { compChartData, compMonths, compMonthLabels, compQuantities, compDelta };
+  }, [monthOrder, monthlyData]);
+
   // Choose dataset for display (ALL vs specific month)
   const display = selectedMonth === "ALL" ? allMonthsAgg : (monthlyData[selectedMonth] || { filteredDataset: [], qtyDistribution: [], qtyBarData: [], aov: null, totalOrders: 0 });
+
+  // simple palette for months
+  const palette = ["#2563eb", "#16a34a", "#f59e0b", "#ef4444", "#8b5cf6", "#0ea5e9", "#22c55e", "#eab308", "#f97316", "#a855f7", "#06b6d4", "#84cc16"];
 
   // ---- UI -------------------------------------------------------------------
   return (
@@ -459,6 +501,87 @@ export default function ShopifyOrderAnalyzer() {
           </Card>
         )}
 
+        {/* NEW: Monthly Distribution Comparison (Grouped/Stacked) */}
+        {!!compChartData.length && (
+          <Card className="mb-6">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-lg flex items-center justify-between">
+                <span>3) Monthly Distribution Compare</span>
+                <span className="inline-flex gap-2">
+                  <Button variant={vizMode === "grouped" ? "default" : "secondary"} onClick={() => setVizMode("grouped")}>Grouped</Button>
+                  <Button variant={vizMode === "stacked" ? "default" : "secondary"} onClick={() => setVizMode("stacked")}>Stacked</Button>
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-80 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={compChartData} margin={{ top: 24, right: 24, left: 0, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="qty" label={{ value: "Quantity per Order", position: "insideBottom", dy: 12 }} />
+                    <YAxis label={{ value: "Percentage of Orders", angle: -90, position: "insideLeft" }} />
+                    <Tooltip formatter={(v: any) => `${v}%`} />
+                    <Legend />
+                    {compMonths.map((m, i) => (
+                      <Bar key={m} dataKey={m} name={compMonthLabels[i]} fill={palette[i % palette.length]} stackId={vizMode === "stacked" ? "all" : undefined} />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* NEW: Month-wise % table with MoM change per pack */}
+        {!!compChartData.length && (
+          <Card className="mb-6">
+            <CardHeader className="pb-2"><CardTitle className="text-lg">Monthly pack share (% of orders) & Δ vs previous month</CardTitle></CardHeader>
+            <CardContent>
+              <div className="overflow-auto rounded-xl border">
+                <table className="w-full text-sm">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="p-2 text-left">Qty</th>
+                      {compMonths.map((m, i) => (
+                        <th key={m} className="p-2 text-left">{compMonthLabels[i]}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compQuantities.map((q) => {
+                      const key = String(q);
+                      return (
+                        <tr key={key} className="odd:bg-white even:bg-neutral-50">
+                          <td className="p-2 font-medium">{key}</td>
+                          {compMonths.map((m, i) => {
+                            const pct = compChartData.find((r) => r.qty === key)?.[m] ?? 0;
+                            const delta = compDelta[key]?.[m] ?? null;
+                            const up = typeof delta === "number" && delta > 0;
+                            const down = typeof delta === "number" && delta < 0;
+                            return (
+                              <td key={m} className="p-2">
+                                <div className="flex items-center gap-2">
+                                  <span>{Number(pct).toFixed(2)}%</span>
+                                  {i > 0 && (
+                                    <span className={up ? "text-green-600" : down ? "text-red-600" : "text-neutral-500"}>
+                                      {up ? <ArrowUpRight className="inline w-4 h-4"/> : down ? <ArrowDownRight className="inline w-4 h-4"/> : null}
+                                      {up ? "+" : ""}{down ? "" : ""}{typeof delta === "number" ? Math.abs(delta).toFixed(2) + "%" : ""}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Results (either ALL or selected month) */}
         {!!display.filteredDataset.length ? (
           <>
@@ -466,7 +589,7 @@ export default function ShopifyOrderAnalyzer() {
               <Card className="lg:col-span-2">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-lg flex items-center gap-2">
-                    <BarChart2 className="w-5 h-5" /> 3) Quantity per Order (% of orders)
+                    <BarChart2 className="w-5 h-5" /> 4) Quantity per Order (% of orders)
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
