@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Download, FileUp, Search, BarChart2, RefreshCcw, UploadCloud, ShieldCheck, FileText } from "lucide-react";
+import { Download, FileUp, Search, BarChart2, RefreshCcw, UploadCloud, ShieldCheck, FileText, Calendar } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, CartesianGrid } from "recharts";
 
 // ---- Config -----------------------------------------------------------------
@@ -15,6 +15,7 @@ const COL_KEYS = {
   lineitem: ["lineitem name"],
   qty: ["lineitem quantity", "quantity"],
   total: ["total", "total price", "order total", "financial status total"],
+  created: ["created at", "created_at", "created at (utc)", "order date", "processed at"],
 };
 const normalize = (s: any) => String(s ?? "").trim().toLowerCase();
 const detectColumn = (columns: string[], candidates: string[]) => {
@@ -26,6 +27,25 @@ const detectColumn = (columns: string[], candidates: string[]) => {
   for (const c of columns) if (candidates.some((cand) => normalize(c).includes(normalize(cand)))) return c;
   return null;
 };
+
+const excelDateToJSDate = (n: number) => {
+  // Excel serial to JS Date (days since 1899-12-30)
+  const ms = Math.round((n - 25569) * 86400 * 1000);
+  return new Date(ms);
+};
+
+const parseDate = (val: any): Date | null => {
+  if (val == null) return null;
+  if (typeof val === "number" && val > 60 && val < 60000) {
+    const d = excelDateToJSDate(val);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+};
+
+const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const monthLabel = (d: Date) => d.toLocaleString(undefined, { month: "short", year: "numeric" });
 
 const readFile = (file: File) =>
   new Promise<any[]>((resolve, reject) => {
@@ -51,9 +71,25 @@ const formatCurrency = (n?: number | null) => (n == null || Number.isNaN(Number(
 
 const exportCSV = (rows: any[], filename = "filtered_orders.csv") => {
   const header = Object.keys(rows[0] || { "Order Name": "", "Total Quantity of Product": "", "Total Order Value": "" });
-  const csv = [header.join(",")]
+  const csv = [header.join(",")] 
     .concat(rows.map((r) => header.map((h) => (r[h] ?? "").toString().replaceAll(",", ";")).join(",")))
-    .join("\n");
+    .join("
+");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const exportMonthlyCSV = (rows: any[], filename = "monthly_summary.csv") => {
+  const header = Object.keys(rows[0] || { Month: "", "Unique Orders": "", AOV: "" });
+  const csv = [header.join(",")] 
+    .concat(rows.map((r) => header.map((h) => (r[h] ?? "").toString().replaceAll(",", ";")).join(",")))
+    .join("
+");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -72,6 +108,7 @@ export default function ShopifyOrderAnalyzer() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState<string>("ALL");
 
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -82,6 +119,7 @@ export default function ShopifyOrderAnalyzer() {
       lineitem: detectColumn(cols, COL_KEYS.lineitem),
       qty: detectColumn(cols, COL_KEYS.qty),
       total: detectColumn(cols, COL_KEYS.total),
+      created: detectColumn(cols, COL_KEYS.created),
     } as const;
   }, [cols]);
 
@@ -97,6 +135,7 @@ export default function ShopifyOrderAnalyzer() {
       setRows(data);
       setCols(columns);
       setFileName(file.name);
+      setSelectedMonth("ALL");
     } catch (e: any) {
       console.error(e);
       setError(e?.message || "Failed to read file.");
@@ -127,7 +166,7 @@ export default function ShopifyOrderAnalyzer() {
   };
 
   const reset = () => {
-    setRows([]); setCols([]); setFileName(""); setKeyword(""); setError(""); setIsDragging(false);
+    setRows([]); setCols([]); setFileName(""); setKeyword(""); setError(""); setIsDragging(false); setSelectedMonth("ALL");
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -153,22 +192,34 @@ export default function ShopifyOrderAnalyzer() {
     return { totalOrdersInFile: total, shippingProtectionOrders: sp, shippingProtectionPct: pct };
   }, [rows, colMap]);
 
-  // ---- Product-level analysis (for current keyword) -------------------------
-  const { filteredDataset, qtyDistribution, qtyBarData, aov, totalOrders } = useMemo(() => {
+  // ---- Precompute order meta (total + month) --------------------------------
+  const orderMeta = useMemo(() => {
+    const meta = new Map<string, { total?: number | null; month?: string; monthLabel?: string }>();
+    if (!rows.length || !(colMap as any).order) return meta;
+
+    rows.forEach((r) => {
+      const order = String(r[(colMap as any).order]);
+      if (!order) return;
+      const tot = Number(r[(colMap as any).total]);
+      const createdVal = (colMap as any).created ? r[(colMap as any).created] : null;
+      const d = createdVal != null ? parseDate(createdVal) : null;
+      const mKey = d ? monthKey(d) : undefined;
+      const mLbl = d ? monthLabel(d) : undefined;
+
+      if (!meta.has(order)) meta.set(order, { total: !Number.isNaN(tot) ? tot : null, month: mKey, monthLabel: mLbl });
+    });
+    return meta;
+  }, [rows, colMap]);
+
+  // ---- Product-level analysis (ALL months) ----------------------------------
+  const allMonthsAgg = useMemo(() => {
     const empty = { filteredDataset: [] as any[], qtyDistribution: [] as any[], qtyBarData: [] as any[], aov: null as number | null, totalOrders: 0 };
     if (!rows.length || !keyword || !(colMap as any).order || !(colMap as any).lineitem || !(colMap as any).qty || !(colMap as any).total) return empty;
-
     const k = normalize(keyword);
     const filtered = rows.filter((r) => normalize(r[(colMap as any).lineitem]).includes(k));
 
     const qtyByOrder = new Map<string, number>();
-    const totalByOrder = new Map<string, number>();
-
-    rows.forEach((r) => {
-      const order = String(r[(colMap as any).order]);
-      const tot = Number(r[(colMap as any).total]);
-      if (!totalByOrder.has(order) && !Number.isNaN(tot)) totalByOrder.set(order, tot);
-    });
+    const totals: number[] = [];
 
     filtered.forEach((r) => {
       const order = String(r[(colMap as any).order]);
@@ -176,10 +227,15 @@ export default function ShopifyOrderAnalyzer() {
       if (!Number.isNaN(qty)) qtyByOrder.set(order, (qtyByOrder.get(order) || 0) + qty);
     });
 
+    Array.from(qtyByOrder.keys()).forEach((order) => {
+      const meta = orderMeta.get(order);
+      if (meta && typeof meta.total === "number") totals.push(meta.total);
+    });
+
     const merged = Array.from(qtyByOrder.entries()).map(([order, q]) => ({
       "Order Name": order,
       "Total Quantity of Product": q,
-      "Total Order Value": totalByOrder.get(order) ?? null,
+      "Total Order Value": orderMeta.get(order)?.total ?? null,
     }));
 
     const hist = new Map<number, number>();
@@ -189,13 +245,71 @@ export default function ShopifyOrderAnalyzer() {
     const totalCount = merged.length || 1;
     const distRows = sortedBins.map(([q, count]) => ({ "Quantity per Order": q, "Order Count": count, Percentage: Number(((count / totalCount) * 100).toFixed(2)) }));
 
-    const validTotals = merged.map((m) => Number(m["Total Order Value"])) .filter((v) => !Number.isNaN(v));
-    const aovVal = validTotals.length ? validTotals.reduce((a, b) => a + b, 0) / validTotals.length : null;
-
+    const aovVal = totals.length ? totals.reduce((a, b) => a + b, 0) / totals.length : null;
     const barData = distRows.map((d) => ({ qty: String(d["Quantity per Order"]), pct: d.Percentage }));
 
     return { filteredDataset: merged, qtyDistribution: distRows, qtyBarData: barData, aov: aovVal, totalOrders: merged.length };
-  }, [rows, keyword, colMap]);
+  }, [rows, keyword, colMap, orderMeta]);
+
+  // ---- Product-level analysis (per month) -----------------------------------
+  const { monthOrder, monthOptions, monthlyData, monthlySummary } = useMemo(() => {
+    const result: Record<string, { label: string; filteredDataset: any[]; qtyDistribution: any[]; qtyBarData: any[]; aov: number | null; totalOrders: number } > = {};
+    const summaryRows: { Month: string; "Unique Orders": number; AOV: string }[] = [];
+    const labels = new Map<string, string>();
+
+    if (!rows.length || !keyword || !(colMap as any).order || !(colMap as any).lineitem || !(colMap as any).qty) return { monthOrder: [] as string[], monthOptions: [] as { key: string; label: string }[], monthlyData: result, monthlySummary: summaryRows };
+
+    const k = normalize(keyword);
+
+    // qty per order per month
+    const qByMonthOrder = new Map<string, Map<string, number>>();
+
+    rows.forEach((r) => {
+      const li = r[(colMap as any).lineitem];
+      if (!li || !normalize(li).includes(k)) return; // only matched product rows
+      const order = String(r[(colMap as any).order]);
+      const qty = Number(r[(colMap as any).qty]);
+      const meta = orderMeta.get(order);
+      const mKey = meta?.month || "Unknown";
+      const mLbl = meta?.monthLabel || "Unknown";
+      labels.set(mKey, mLbl);
+      if (!Number.isNaN(qty)) {
+        if (!qByMonthOrder.has(mKey)) qByMonthOrder.set(mKey, new Map());
+        const inner = qByMonthOrder.get(mKey)!;
+        inner.set(order, (inner.get(order) || 0) + qty);
+      }
+    });
+
+    const sortedKeys = Array.from(qByMonthOrder.keys()).sort((a, b) => (a < b ? -1 : 1));
+
+    sortedKeys.forEach((mKey) => {
+      const inner = qByMonthOrder.get(mKey)!;
+      const merged = Array.from(inner.entries()).map(([order, q]) => ({
+        "Order Name": order,
+        "Total Quantity of Product": q,
+        "Total Order Value": orderMeta.get(order)?.total ?? null,
+      }));
+
+      const totals = merged.map((m) => Number(m["Total Order Value"])) .filter((v) => !Number.isNaN(v));
+      const aovVal = totals.length ? totals.reduce((a, b) => a + b, 0) / totals.length : null;
+
+      const hist = new Map<number, number>();
+      merged.forEach((m) => hist.set(m["Total Quantity of Product"], (hist.get(m["Total Quantity of Product"]) || 0) + 1));
+      const sortedBins = Array.from(hist.entries()).sort((a, b) => a[0] - b[0]);
+      const totalCount = merged.length || 1;
+      const distRows = sortedBins.map(([q, count]) => ({ "Quantity per Order": q, "Order Count": count, Percentage: Number(((count / totalCount) * 100).toFixed(2)) }));
+      const barData = distRows.map((d) => ({ qty: String(d["Quantity per Order"]), pct: d.Percentage }));
+
+      result[mKey] = { label: labels.get(mKey) || mKey, filteredDataset: merged, qtyDistribution: distRows, qtyBarData: barData, aov: aovVal, totalOrders: merged.length };
+      summaryRows.push({ Month: labels.get(mKey) || mKey, "Unique Orders": merged.length, AOV: `$${formatCurrency(aovVal)}` });
+    });
+
+    const options = sortedKeys.map((k) => ({ key: k, label: labels.get(k) || k }));
+    return { monthOrder: sortedKeys, monthOptions: options, monthlyData: result, monthlySummary: summaryRows };
+  }, [rows, keyword, colMap, orderMeta]);
+
+  // Choose dataset for display (ALL vs specific month)
+  const display = selectedMonth === "ALL" ? allMonthsAgg : (monthlyData[selectedMonth] || { filteredDataset: [], qtyDistribution: [], qtyBarData: [], aov: null, totalOrders: 0 });
 
   // ---- UI -------------------------------------------------------------------
   return (
@@ -278,27 +392,77 @@ export default function ShopifyOrderAnalyzer() {
           </CardContent>
         </Card>
 
-        {/* Keyword */}
+        {/* Keyword + Month selector */}
         <Card className="mb-6">
           <CardHeader className="pb-2">
-            <CardTitle className="text-lg">2) Enter product text (Lineitem name contains)</CardTitle>
+            <CardTitle className="text-lg">2) Enter product text (Lineitem name contains) & choose month</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <Input
                 placeholder="e.g. Sima Hexagon Exfoliating Antibacterial Shower Towel"
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
               />
-              <Button disabled={!rows.length || !!error}>
-                <Search className="w-4 h-4 mr-2" /> Run
-              </Button>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 text-sm bg-white border rounded-xl px-3 py-2">
+                  <Calendar className="w-4 h-4" />
+                  <select
+                    className="bg-transparent outline-none"
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    disabled={!monthOptions.length}
+                  >
+                    <option value="ALL">All months</option>
+                    {monthOptions.map((m) => (
+                      <option key={m.key} value={m.key}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <Button disabled={!rows.length || !!error}>
+                  <Search className="w-4 h-4 mr-2" /> Run
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Results */}
-        {!!filteredDataset.length ? (
+        {/* Monthly Summary Table (for product) */}
+        {!!monthlySummary.length && (
+          <Card className="mb-6">
+            <CardHeader className="pb-2"><CardTitle className="text-lg flex items-center gap-2"><Calendar className="w-5 h-5"/> Monthly Breakdown (searched product)</CardTitle></CardHeader>
+            <CardContent>
+              <div className="overflow-auto rounded-xl border">
+                <table className="w-full text-sm">
+                  <thead className="bg-neutral-100">
+                    <tr>
+                      <th className="p-2 text-left">Month</th>
+                      <th className="p-2 text-left">Unique Orders</th>
+                      <th className="p-2 text-left">AOV</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlySummary.map((r, i) => (
+                      <tr key={i} className="odd:bg-white even:bg-neutral-50">
+                        <td className="p-2">{r.Month}</td>
+                        <td className="p-2">{r["Unique Orders"].toLocaleString()}</td>
+                        <td className="p-2">{r.AOV}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button onClick={() => exportMonthlyCSV(monthlySummary, `monthly_summary_${Date.now()}.csv`)}>
+                  <Download className="w-4 h-4 mr-2" /> Export Monthly CSV
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Results (either ALL or selected month) */}
+        {!!display.filteredDataset.length ? (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <Card className="lg:col-span-2">
@@ -310,7 +474,7 @@ export default function ShopifyOrderAnalyzer() {
                 <CardContent>
                   <div className="h-72 w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={qtyBarData} margin={{ top: 24, right: 24, left: 0, bottom: 8 }}>
+                      <BarChart data={display.qtyBarData} margin={{ top: 24, right: 24, left: 0, bottom: 8 }}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="qty" label={{ value: "Quantity per Order", position: "insideBottom", dy: 12 }} />
                         <YAxis label={{ value: "Percentage of Orders", angle: -90, position: "insideLeft" }} />
@@ -323,8 +487,8 @@ export default function ShopifyOrderAnalyzer() {
                   </div>
                   <div className="mt-3 flex items-center justify-end">
                     <div className="text-right text-sm bg-white/80 shadow px-3 py-2 rounded-xl">
-                      <div><span className="text-neutral-500">Total Orders:</span> <span className="font-medium">{totalOrders.toLocaleString()}</span></div>
-                      <div><span className="text-neutral-500">AOV:</span> <span className="font-medium">${formatCurrency(aov)}</span></div>
+                      <div><span className="text-neutral-500">Total Orders:</span> <span className="font-medium">{display.totalOrders.toLocaleString()}</span></div>
+                      <div><span className="text-neutral-500">AOV:</span> <span className="font-medium">${formatCurrency(display.aov)}</span></div>
                     </div>
                   </div>
                 </CardContent>
@@ -335,11 +499,12 @@ export default function ShopifyOrderAnalyzer() {
                 <CardContent className="space-y-2 text-sm">
                   <div><span className="text-neutral-500">File:</span> {fileName}</div>
                   <div><span className="text-neutral-500">Keyword:</span> {keyword}</div>
-                  <div><span className="text-neutral-500">Orders containing product:</span> <b>{totalOrders.toLocaleString()}</b></div>
-                  <div><span className="text-neutral-500">AOV (incl. other items):</span> <b>${formatCurrency(aov)}</b></div>
+                  <div><span className="text-neutral-500">View:</span> {selectedMonth === "ALL" ? "All months" : (monthlyData[selectedMonth]?.label || selectedMonth)}</div>
+                  <div><span className="text-neutral-500">Orders containing product:</span> <b>{display.totalOrders.toLocaleString()}</b></div>
+                  <div><span className="text-neutral-500">AOV (incl. other items):</span> <b>${formatCurrency(display.aov)}</b></div>
                   <Button
                     className="w-full mt-3"
-                    onClick={() => exportCSV(filteredDataset, `filtered_orders_${Date.now()}.csv`)}
+                    onClick={() => exportCSV(display.filteredDataset, `filtered_orders_${selectedMonth}_${Date.now()}.csv`)}
                   >
                     <Download className="w-4 h-4 mr-2" /> Export CSV
                   </Button>
@@ -361,7 +526,7 @@ export default function ShopifyOrderAnalyzer() {
                         </tr>
                       </thead>
                       <tbody>
-                        {filteredDataset.slice(0, 500).map((r: any, i: number) => (
+                        {display.filteredDataset.slice(0, 500).map((r: any, i: number) => (
                           <tr key={i} className="odd:bg-white even:bg-neutral-50">
                             <td className="p-2">{r["Order Name"]}</td>
                             <td className="p-2">{r["Total Quantity of Product"]}</td>
@@ -370,7 +535,7 @@ export default function ShopifyOrderAnalyzer() {
                         ))}
                       </tbody>
                     </table>
-                    {filteredDataset.length > 500 && (
+                    {display.filteredDataset.length > 500 && (
                       <div className="p-3 text-xs text-neutral-500">Showing first 500 rows… export CSV for full data.</div>
                     )}
                   </div>
@@ -390,7 +555,7 @@ export default function ShopifyOrderAnalyzer() {
                         </tr>
                       </thead>
                       <tbody>
-                        {qtyDistribution.map((d: any, i: number) => (
+                        {display.qtyDistribution.map((d: any, i: number) => (
                           <tr key={i} className="odd:bg-white even:bg-neutral-50">
                             <td className="p-2">{d["Quantity per Order"]}</td>
                             <td className="p-2">{d["Order Count"].toLocaleString()}</td>
