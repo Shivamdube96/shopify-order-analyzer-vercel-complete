@@ -132,7 +132,6 @@ export default function ShopifyOrderAnalyzer() {
   const [error, setError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string>("ALL");
-  const [vizMode, setVizMode] = useState<"grouped" | "stacked">("grouped");
 
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -455,10 +454,10 @@ export default function ShopifyOrderAnalyzer() {
           </CardContent>
         </Card>
 
-        {/* Keyword + Month selector */}
+        {/* Keyword (no month picker here) */}
         <Card className="mb-6">
           <CardHeader className="pb-2">
-            <CardTitle className="text-lg">2) Enter product text (Lineitem name contains) & choose month</CardTitle>
+            <CardTitle className="text-lg">2) Enter product text (Lineitem name contains)</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-col sm:flex-row gap-2">
@@ -467,25 +466,9 @@ export default function ShopifyOrderAnalyzer() {
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
               />
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-2 text-sm bg-white border rounded-xl px-3 py-2">
-                  <Calendar className="w-4 h-4" />
-                  <select
-                    className="bg-transparent outline-none"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    disabled={!monthOptions.length}
-                  >
-                    <option value="ALL">All months</option>
-                    {monthOptions.map((m) => (
-                      <option key={m.key} value={m.key}>{m.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <Button disabled={!rows.length || !!error}>
-                  <Search className="w-4 h-4 mr-2" /> Run
-                </Button>
-              </div>
+              <Button disabled={!rows.length || !!error}>
+                <Search className="w-4 h-4 mr-2" /> Run
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -524,35 +507,28 @@ export default function ShopifyOrderAnalyzer() {
           </Card>
         )}
 
-        {/* NEW: Monthly Distribution Comparison (Grouped/Stacked) */}
+        {/* NEW: Monthly Distribution Comparison (Grouped) */}
         {!!compChartData.length && (
           <Card className="mb-6">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-lg flex items-center justify-between">
-                <span>3) Monthly Distribution Compare</span>
-                <span className="inline-flex gap-2">
-                  <Button variant={vizMode === "grouped" ? "default" : "secondary"} onClick={() => setVizMode("grouped")}>Grouped</Button>
-                  <Button variant={vizMode === "stacked" ? "default" : "secondary"} onClick={() => setVizMode("stacked")}>Stacked</Button>
-                </span>
-              </CardTitle>
-            </CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-lg">3) Monthly Distribution Compare (Grouped)</CardTitle></CardHeader>
             <CardContent>
               <div className="h-80 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={compChartData} margin={{ top: 24, right: 24, left: 0, bottom: 8 }}>
+                  <BarChart data={compChartData} margin={{ top: 24, right: 24, left: 0, bottom: 36 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="qty" label={{ value: "Quantity per Order", position: "insideBottom", dy: 12 }} />
+                    <XAxis dataKey="qty" tickMargin={12} label={{ value: "Quantity per Order", position: "insideBottom", dy: 20 }} />
                     <YAxis label={{ value: "Percentage of Orders", angle: -90, position: "insideLeft" }} />
                     <Tooltip formatter={(v: any) => `${v}%`} />
                     <Legend />
                     {compMonths.map((m, i) => (
-                      <Bar key={m} dataKey={m} name={compMonthLabels[i]} fill={palette[i % palette.length]} stackId={vizMode === "stacked" ? "all" : undefined} />
+                      <Bar key={m} dataKey={m} name={compMonthLabels[i]} fill={palette[i % palette.length]} />
                     ))}
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
+        )}
         )}
 
         {/* NEW: Month-wise % table with MoM change per pack */}
@@ -618,9 +594,9 @@ export default function ShopifyOrderAnalyzer() {
                 <CardContent>
                   <div className="h-72 w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={display.qtyBarData} margin={{ top: 24, right: 24, left: 0, bottom: 8 }}>
+                      <BarChart data={display.qtyBarData} margin={{ top: 24, right: 24, left: 0, bottom: 36 }}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="qty" label={{ value: "Quantity per Order", position: "insideBottom", dy: 12 }} />
+                        <XAxis dataKey="qty" tickMargin={12} label={{ value: "Quantity per Order", position: "insideBottom", dy: 20 }} />
                         <YAxis label={{ value: "Percentage of Orders", angle: -90, position: "insideLeft" }} />
                         <Tooltip formatter={(v: any) => `${v}%`} />
                         <Bar dataKey="pct" radius={[6, 6, 0, 0]}>
@@ -640,7 +616,24 @@ export default function ShopifyOrderAnalyzer() {
 
               <Card>
                 <CardHeader className="pb-2"><CardTitle className="text-lg">Summary</CardTitle></CardHeader>
-                <CardContent className="space-y-2 text-sm">
+                <CardContent className="space-y-3 text-sm">
+                  {/* Month picker moved here */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 text-sm bg-white border rounded-xl px-3 py-2">
+                      <Calendar className="w-4 h-4" />
+                      <select
+                        className="bg-transparent outline-none"
+                        value={selectedMonth}
+                        onChange={(e) => setSelectedMonth(e.target.value)}
+                        disabled={!monthOptions.length}
+                      >
+                        <option value="ALL">All months</option>
+                        {monthOptions.map((m) => (
+                          <option key={m.key} value={m.key}>{m.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                   <div><span className="text-neutral-500">File:</span> {fileName}</div>
                   <div><span className="text-neutral-500">Keyword:</span> {keyword}</div>
                   <div><span className="text-neutral-500">View:</span> {selectedMonth === "ALL" ? "All months" : (monthlyData[selectedMonth]?.label || selectedMonth)}</div>
