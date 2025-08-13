@@ -529,7 +529,6 @@ export default function ShopifyOrderAnalyzer() {
             </CardContent>
           </Card>
         )}
-        )}
 
         {/* NEW: Month-wise % table with MoM change per pack */}
         {!!compChartData.length && (
