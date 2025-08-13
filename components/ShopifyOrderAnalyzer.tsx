@@ -34,6 +34,31 @@ const excelDateToJSDate = (n: number) => {
   return new Date(ms);
 };
 
+// Extract YYYY-MM-DD from Shopify "Created at" like: 2025-05-31 23:55:44 -0400
+// Treat the first 10 chars as the store-local calendar date to avoid timezone rollovers.
+const extractYMD = (val: any): { y: number; m: number; d: number } | null => {
+  if (val == null) return null;
+  if (typeof val === "string") {
+    const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})/.exec(val);
+    if (m) return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+  }
+  if (typeof val === "number" && val > 60 && val < 60000) {
+    // Excel serial number fallback
+    const d = excelDateToJSDate(val);
+    if (!isNaN(d.getTime())) return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
+  }
+  // Last resort: Date parsing (may shift across months on some machines)
+  const d = new Date(val);
+  if (!isNaN(d.getTime())) return { y: d.getFullYear(), m: d.getMonth() + 1, d: d.getDate() };
+  return null;
+};
+
+const monthKeyFromYMD = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}`;
+const monthLabelFromYMD = (y: number, m: number) => {
+  const dt = new Date(Date.UTC(y, m - 1, 1));
+  return dt.toLocaleString(undefined, { month: "short", year: "numeric", timeZone: "UTC" });
+};
+
 const parseDate = (val: any): Date | null => {
   if (val == null) return null;
   if (typeof val === "number" && val > 60 && val < 60000) {
@@ -201,9 +226,9 @@ export default function ShopifyOrderAnalyzer() {
       if (!order) return;
       const tot = Number(r[(colMap as any).total]);
       const createdVal = (colMap as any).created ? r[(colMap as any).created] : null;
-      const d = createdVal != null ? parseDate(createdVal) : null;
-      const mKey = d ? monthKey(d) : undefined;
-      const mLbl = d ? monthLabel(d) : undefined;
+      const ymd = createdVal != null ? extractYMD(createdVal) : null;
+      const mKey = ymd ? monthKeyFromYMD(ymd.y, ymd.m) : undefined;
+      const mLbl = ymd ? monthLabelFromYMD(ymd.y, ymd.m) : undefined;
 
       if (!meta.has(order)) meta.set(order, { total: !Number.isNaN(tot) ? tot : null, month: mKey, monthLabel: mLbl });
     });
