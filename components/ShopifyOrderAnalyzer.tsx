@@ -73,8 +73,7 @@ const exportCSV = (rows: any[], filename = "filtered_orders.csv") => {
   const header = Object.keys(rows[0] || { "Order Name": "", "Total Quantity of Product": "", "Total Order Value": "" });
   const csv = [header.join(",")] 
     .concat(rows.map((r) => header.map((h) => (r[h] ?? "").toString().replaceAll(",", ";")).join(",")))
-    .join("
-");
+    .join("\\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -88,8 +87,7 @@ const exportMonthlyCSV = (rows: any[], filename = "monthly_summary.csv") => {
   const header = Object.keys(rows[0] || { Month: "", "Unique Orders": "", AOV: "" });
   const csv = [header.join(",")] 
     .concat(rows.map((r) => header.map((h) => (r[h] ?? "").toString().replaceAll(",", ";")).join(",")))
-    .join("
-");
+    .join("\\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
