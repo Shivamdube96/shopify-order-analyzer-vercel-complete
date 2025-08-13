@@ -1,14 +1,15 @@
 "use client";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useMemo, useRef, useState, useCallback } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Download, FileUp, Search, BarChart2, RefreshCcw } from "lucide-react";
+import { Download, FileUp, Search, BarChart2, RefreshCcw, UploadCloud, ShieldCheck, FileText } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList, CartesianGrid } from "recharts";
 
+// ---- Config -----------------------------------------------------------------
 const COL_KEYS = {
   order: ["name", "order name"],
   lineitem: ["lineitem name"],
@@ -62,6 +63,7 @@ const exportCSV = (rows: any[], filename = "filtered_orders.csv") => {
   URL.revokeObjectURL(url);
 };
 
+// ---- Component ---------------------------------------------------------------
 export default function ShopifyOrderAnalyzer() {
   const [rows, setRows] = useState<any[]>([]);
   const [cols, setCols] = useState<string[]>([]);
@@ -69,6 +71,8 @@ export default function ShopifyOrderAnalyzer() {
   const [keyword, setKeyword] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
+
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const colMap = useMemo(() => {
@@ -81,17 +85,10 @@ export default function ShopifyOrderAnalyzer() {
     } as const;
   }, [cols]);
 
-  const productNames = useMemo(() => {
-    if (!rows.length || !(colMap as any).lineitem) return [] as string[];
-    const set = new Set<string>();
-    rows.forEach((r) => {
-      const v = r[(colMap as any).lineitem];
-      if (v) set.add(String(v));
-    });
-    return Array.from(set).sort();
-  }, [rows, colMap]);
-
-  const onFile = async (file: File) => {
+  // ---- Drag & Drop -----------------------------------------------------------
+  const handleFiles = useCallback(async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
     try {
       setError("");
       setRunning(true);
@@ -105,9 +102,58 @@ export default function ShopifyOrderAnalyzer() {
       setError(e?.message || "Failed to read file.");
     } finally {
       setRunning(false);
+      setIsDragging(false);
     }
+  }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleFiles(e.dataTransfer.files);
+    },
+    [handleFiles]
+  );
+
+  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragging) setIsDragging(true);
+  };
+  const onDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
   };
 
+  const reset = () => {
+    setRows([]); setCols([]); setFileName(""); setKeyword(""); setError(""); setIsDragging(false);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  // ---- Order-level Summary (entire file) ------------------------------------
+  const { totalOrdersInFile, shippingProtectionOrders, shippingProtectionPct } = useMemo(() => {
+    if (!rows.length || !(colMap as any).order) return { totalOrdersInFile: 0, shippingProtectionOrders: 0, shippingProtectionPct: 0 };
+
+    const orderSet = new Set<string>();
+    const spOrderSet = new Set<string>();
+    const lineCol = (colMap as any).lineitem;
+
+    rows.forEach((r) => {
+      const order = String(r[(colMap as any).order]);
+      if (order) orderSet.add(order);
+      if (lineCol) {
+        const li = r[lineCol];
+        if (li && normalize(li).includes("shipping protection")) spOrderSet.add(order);
+      }
+    });
+    const total = orderSet.size;
+    const sp = spOrderSet.size;
+    const pct = total ? Number(((sp / total) * 100).toFixed(2)) : 0;
+    return { totalOrdersInFile: total, shippingProtectionOrders: sp, shippingProtectionPct: pct };
+  }, [rows, colMap]);
+
+  // ---- Product-level analysis (for current keyword) -------------------------
   const { filteredDataset, qtyDistribution, qtyBarData, aov, totalOrders } = useMemo(() => {
     const empty = { filteredDataset: [] as any[], qtyDistribution: [] as any[], qtyBarData: [] as any[], aov: null as number | null, totalOrders: 0 };
     if (!rows.length || !keyword || !(colMap as any).order || !(colMap as any).lineitem || !(colMap as any).qty || !(colMap as any).total) return empty;
@@ -143,7 +189,7 @@ export default function ShopifyOrderAnalyzer() {
     const totalCount = merged.length || 1;
     const distRows = sortedBins.map(([q, count]) => ({ "Quantity per Order": q, "Order Count": count, Percentage: Number(((count / totalCount) * 100).toFixed(2)) }));
 
-    const validTotals = merged.map((m) => Number(m["Total Order Value"])).filter((v) => !Number.isNaN(v));
+    const validTotals = merged.map((m) => Number(m["Total Order Value"])) .filter((v) => !Number.isNaN(v));
     const aovVal = validTotals.length ? validTotals.reduce((a, b) => a + b, 0) / validTotals.length : null;
 
     const barData = distRows.map((d) => ({ qty: String(d["Quantity per Order"]), pct: d.Percentage }));
@@ -151,11 +197,7 @@ export default function ShopifyOrderAnalyzer() {
     return { filteredDataset: merged, qtyDistribution: distRows, qtyBarData: barData, aov: aovVal, totalOrders: merged.length };
   }, [rows, keyword, colMap]);
 
-  const reset = () => {
-    setRows([]); setCols([]); setFileName(""); setKeyword(""); setError("");
-    if (fileRef.current) fileRef.current.value = "";
-  };
-
+  // ---- UI -------------------------------------------------------------------
   return (
     <div className="min-h-screen w-full bg-neutral-50">
       <div className="max-w-6xl mx-auto p-6">
@@ -168,39 +210,94 @@ export default function ShopifyOrderAnalyzer() {
           </div>
         </div>
 
+        {/* ORDER SUMMARY (Entire file) */}
+        {!!rows.length && (
+          <Card className="mb-6">
+            <CardHeader className="pb-2"><CardTitle className="text-lg flex items-center gap-2"><FileText className="w-5 h-5"/> Order Summary (entire file)</CardTitle></CardHeader>
+            <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+              <div className="flex items-center gap-3 p-3 rounded-xl border bg-white">
+                <FileText className="w-5 h-5" />
+                <div>
+                  <div className="text-neutral-500">Total orders in file</div>
+                  <div className="text-lg font-semibold">{totalOrdersInFile.toLocaleString()}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-xl border bg-white">
+                <ShieldCheck className="w-5 h-5" />
+                <div>
+                  <div className="text-neutral-500">Orders w/ Shipping Protection</div>
+                  <div className="text-lg font-semibold">{shippingProtectionOrders.toLocaleString()}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 p-3 rounded-xl border bg-white">
+                <ShieldCheck className="w-5 h-5" />
+                <div>
+                  <div className="text-neutral-500">% of orders w/ Shipping Protection</div>
+                  <div className="text-lg font-semibold">{shippingProtectionPct}%</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* UPLOAD: Drag & Drop Dropzone */}
         <Card className="mb-6">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">1) Upload your Shopify export</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-            <Input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} className="sm:w-auto" />
-            <Button variant="secondary" onClick={reset} disabled={!rows.length}>
-              <RefreshCcw className="w-4 h-4 mr-2" /> Reset
-            </Button>
-            <div className="text-sm text-neutral-600 flex items-center gap-2">
-              <FileUp className="w-4 h-4" /> {fileName || "No file selected"}
+          <CardContent>
+            <div
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              className={`relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 transition ${
+                isDragging ? "bg-neutral-100 border-neutral-400" : "bg-white border-neutral-300"
+              }`}
+            >
+              <UploadCloud className="w-8 h-8 mb-2" />
+              <div className="text-sm text-neutral-700 mb-1">Drag & drop CSV/XLSX here</div>
+              <div className="text-xs text-neutral-500 mb-3">or click to browse</div>
+              <Input
+                ref={fileRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                onChange={(e) => handleFiles(e.target.files)}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+                aria-label="Upload file"
+              />
+              <div className="mt-2 flex items-center gap-2 text-xs text-neutral-600">
+                <FileUp className="w-4 h-4" /> {fileName || "No file selected"}
+              </div>
+              <div className="mt-3">
+                <Button variant="secondary" onClick={reset} disabled={!rows.length}>
+                  <RefreshCcw className="w-4 h-4 mr-2" /> Reset
+                </Button>
+              </div>
             </div>
+            {error && <div className="text-red-600 text-sm mt-3">{error}</div>}
           </CardContent>
         </Card>
 
+        {/* Keyword */}
         <Card className="mb-6">
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">2) Enter product text (Lineitem name contains)</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex gap-2">
-              <Input placeholder="e.g. Sima Hexagon Exfoliating Antibacterial Shower Towel" value={keyword} onChange={(e) => setKeyword(e.target.value)} />
+              <Input
+                placeholder="e.g. Sima Hexagon Exfoliating Antibacterial Shower Towel"
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
               <Button disabled={!rows.length || !!error}>
                 <Search className="w-4 h-4 mr-2" /> Run
               </Button>
             </div>
-            {!!productNames.length && (
-              <div className="text-xs text-neutral-600">Tip: starts-with your keyword to narrow. {productNames.length.toLocaleString()} variants found in file.</div>
-            )}
-            {error && <div className="text-red-600 text-sm">{error}</div>}
           </CardContent>
         </Card>
 
+        {/* Results */}
         {!!filteredDataset.length ? (
           <>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -240,7 +337,10 @@ export default function ShopifyOrderAnalyzer() {
                   <div><span className="text-neutral-500">Keyword:</span> {keyword}</div>
                   <div><span className="text-neutral-500">Orders containing product:</span> <b>{totalOrders.toLocaleString()}</b></div>
                   <div><span className="text-neutral-500">AOV (incl. other items):</span> <b>${formatCurrency(aov)}</b></div>
-                  <Button className="w-full mt-3" onClick={() => exportCSV(filteredDataset, `filtered_orders_${Date.now()}.csv`)}>
+                  <Button
+                    className="w-full mt-3"
+                    onClick={() => exportCSV(filteredDataset, `filtered_orders_${Date.now()}.csv`)}
+                  >
                     <Download className="w-4 h-4 mr-2" /> Export CSV
                   </Button>
                 </CardContent>
