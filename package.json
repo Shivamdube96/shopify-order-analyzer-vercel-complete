@@ -16,7 +16,7 @@
     "xlsx": "^0.18.5",
     "recharts": "^2.12.6",
     "lucide-react": "^0.453.0",
-    "@vercel/analytics": "latest"
+    "@vercel/analytics": "latest",
     "clsx": "^2.1.1"
   },
   "devDependencies": {
