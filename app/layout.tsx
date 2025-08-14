@@ -1,15 +1,18 @@
 import type { Metadata } from "next";
-import "./globals.css";
+import { Analytics } from "@vercel/analytics/react";
 
 export const metadata: Metadata = {
   title: "Shopify Order Analyzer",
-  description: "Upload Shopify exports and generate product-level AOV & distribution reports."
+  description: "Analyze Shopify order exports in your browser",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body>
+        {children}
+        <Analytics />
+      </body>
     </html>
   );
 }
